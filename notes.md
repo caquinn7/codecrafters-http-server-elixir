@@ -1,0 +1,1 @@
+To try this locally on macOS, you could run ./your_server.sh in one terminal session, and nc -vz 127.0.0.1 4221 in another. (-v gives more verbose output, -z just scan for listening daemons, without sending any data to them.)
