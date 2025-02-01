@@ -17,7 +17,22 @@ defmodule Server do
     {:ok, client} = :gen_tcp.accept(socket)
     IO.puts("Accepted connection...")
 
-    :gen_tcp.send(client, "HTTP/1.1 200 OK\r\n\r\n")
+    {:ok, request} = :gen_tcp.recv(client, 0)
+    IO.puts("Received request:\n#{request}")
+
+    req_line =
+      String.split(request, "\r\n")
+      |> List.first
+      |> String.split(" ")
+
+    [_, req_target | _] = req_line
+
+    resp = case req_target do
+      "/" -> "HTTP/1.1 200 OK\r\n\r\n"
+      _ -> "HTTP/1.1 404 Not Found\r\n\r\n"
+    end
+
+    :gen_tcp.send(client, resp)
     :gen_tcp.close(client)
   end
 end
