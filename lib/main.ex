@@ -18,27 +18,56 @@ defmodule Server do
     {:ok, request} = :gen_tcp.recv(client, 0)
     IO.puts("Received request:\n#{request}")
 
-    [method, req_target | _] = get_request_line(request)
-    resp = route_request(method, req_target)
+    {method, target, headers, _body} = destruct_request(request)
+    route_segments = String.split(target, "/", trim: true)
+
+    resp =
+      case {method, route_segments} do
+        {"GET", []} ->
+          build_response(200, "")
+
+        {"GET", ["echo", to_echo]} ->
+          build_response(200, to_echo)
+
+        {"GET", ["user-agent"]} ->
+          headers
+          |> Map.get("User-Agent", "")
+          |> then(fn x -> build_response(200, x) end)
+
+        {"GET", _} ->
+          build_response(404, "")
+
+        {_, _} ->
+          build_response(405, "")
+      end
+
     :gen_tcp.send(client, resp)
     :gen_tcp.close(client)
   end
 
-  defp get_request_line(request) do
-    String.split(request, "\r\n")
-    |> List.first()
-    |> String.split(" ")
-  end
+  defp destruct_request(request) do
+    [before_body, body] = String.split(request, "\r\n\r\n")
 
-  defp route_request(method, request_target) do
-    route_segments = String.split(request_target, "/", trim: true)
+    before_body_lines = String.split(before_body, "\r\n")
 
-    case {method, route_segments} do
-      {"GET", []} -> build_response(200, "")
-      {"GET", ["echo", to_echo]} -> build_response(200, to_echo)
-      {"GET", _} -> build_response(404, "")
-      {_, _} -> build_response(405, "")
-    end
+    [method, target, _http_version] =
+      before_body_lines
+      |> List.first()
+      |> String.split(" ")
+
+    headers =
+      before_body_lines
+      |> Enum.drop(1)
+      |> Enum.map(fn line ->
+        line
+        |> String.split(": ", trim: true)
+        |> case do
+          [k, v] -> {k, v}
+        end
+      end)
+      |> Enum.into(%{})
+
+    {method, target, headers, body}
   end
 
   defp build_response(status_code, body) do
