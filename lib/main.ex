@@ -40,10 +40,49 @@ defmodule HttpRequest do
   end
 end
 
+defmodule HttpResponse do
+  defstruct status_code: "", headers: %{}, body: ""
+
+  def new(status_code, opts \\ []) do
+    headers = Keyword.get(opts, :headers, %{})
+    content_type = Keyword.get(opts, :content_type, "text/plain")
+    body = Keyword.get(opts, :body, "")
+
+    status_msg =
+      case status_code do
+        200 -> "OK"
+        404 -> "Not Found"
+        405 -> "Method Not Allowed"
+        500 -> "Internal Server Error"
+      end
+
+    headers_str =
+      headers
+      |> Map.put("Content-Type", content_type)
+      |> Map.put("Content-Length", Integer.to_string(byte_size(body)))
+      |> Map.to_list()
+      |> Enum.map(fn {k, v} -> "#{k}: #{v}" end)
+      |> Enum.join("\r\n")
+
+    """
+    HTTP/1.1 #{status_code} #{status_msg}\r
+    #{headers_str}\r
+    \r
+    #{body}\
+    """
+  end
+end
+
 defmodule Server do
   use Application
 
   def start(_type, _args) do
+    directory = parse_directory(System.argv())
+
+    if directory do
+      Application.put_env(:codecrafters_http_server, :directory, directory)
+    end
+
     children = [
       {Task, fn -> Server.listen() end}
     ]
@@ -57,6 +96,13 @@ defmodule Server do
     {:ok, socket} = :gen_tcp.listen(4221, [:binary, active: false, reuseaddr: true])
     IO.puts("Listening...")
     accept_loop(socket)
+  end
+
+  defp parse_directory(argv) do
+    case argv do
+      ["--directory", dir | _] -> dir
+      _ -> nil
+    end
   end
 
   defp accept_loop(socket) do
@@ -92,47 +138,54 @@ defmodule Server do
 
     case {method, route_segments} do
       {"GET", []} ->
-        build_response(200, "")
+        HttpResponse.new(200)
 
       {"GET", ["echo", to_echo]} ->
-        build_response(200, to_echo)
+        HttpResponse.new(200, body: to_echo)
 
       {"GET", ["user-agent"]} ->
         headers
         |> Map.get("User-Agent", "")
-        |> then(&build_response(200, &1))
+        |> then(fn user_agent -> HttpResponse.new(200, body: user_agent) end)
+
+      {"GET", ["files", file_name]} ->
+        case Application.get_env(:codecrafters_http_server, :directory) do
+          nil -> HttpResponse.new(500, body: "directory not set")
+          directory -> serve_file(directory, file_name)
+        end
 
       {"GET", _} ->
-        build_response(404, "")
+        HttpResponse.new(404)
 
       {_, _} ->
-        build_response(405, "")
+        HttpResponse.new(405)
     end
   end
 
-  defp build_response(status_code, body) do
-    status_msg =
-      case status_code do
-        200 -> "OK"
-        404 -> "Not Found"
-        405 -> "Method Not Allowed"
-      end
+  defp serve_file(directory, file_name) do
+    path = Path.join(directory, file_name)
 
-    """
-    HTTP/1.1 #{status_code} #{status_msg}\r
-    Content-Type: text/plain\r
-    Content-Length: #{byte_size(body)}\r
-    \r
-    #{body}\
-    """
+    case File.read(path) do
+      {:ok, contents} ->
+        HttpResponse.new(200,
+          content_type: "application/octet-stream",
+          body: contents
+        )
+
+      {:error, :enoent} ->
+        HttpResponse.new(404)
+
+      {:error, reason} ->
+        IO.puts("Failed to read file at #{path}: #{inspect(reason)}")
+        HttpResponse.new(500)
+    end
   end
 end
 
-defmodule CLI do
+defmodule Cli do
   def main(_args) do
     # Start the Server application
     {:ok, _pid} = Application.ensure_all_started(:codecrafters_http_server)
-
     # Run forever
     Process.sleep(:infinity)
   end
