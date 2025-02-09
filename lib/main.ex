@@ -67,7 +67,12 @@ defmodule Server do
     end
   end
 
-  defp route_request(%HttpRequest{method: method, target: target, headers: headers, body: body}) do
+  defp route_request(%HttpRequest{
+         method: method,
+         target: target,
+         headers: req_headers,
+         body: body
+       }) do
     route_segments = String.split(target, "/", trim: true)
 
     case {method, route_segments} do
@@ -75,13 +80,19 @@ defmodule Server do
         HttpResponse.new(200)
 
       {"GET", ["echo", to_echo]} ->
-        HttpResponse.new(200, body: to_echo)
+        resp_headers =
+          case req_headers do
+            %{"Accept-Encoding" => "gzip"} -> %{"Content-Encoding" => "gzip"}
+            _ -> %{}
+          end
+
+        HttpResponse.new(200, headers: resp_headers, body: to_echo)
 
       {"POST", ["echo"]} ->
         HttpResponse.new(200, body: body)
 
       {"GET", ["user-agent"]} ->
-        headers
+        req_headers
         |> Map.get("User-Agent", "")
         |> then(fn user_agent -> HttpResponse.new(200, body: user_agent) end)
 
