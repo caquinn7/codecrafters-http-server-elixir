@@ -1,78 +1,3 @@
-defmodule HttpRequest do
-  defstruct method: "", target: "", headers: %{}, body: ""
-
-  def parse(request) do
-    [before_body, body] = String.split(request, "\r\n\r\n", parts: 2)
-
-    before_body_lines = String.split(before_body, "\r\n")
-
-    request_line =
-      before_body_lines
-      |> List.first()
-      |> String.split(" ", parts: 3)
-
-    case request_line do
-      [method, target, _http_version] ->
-        headers =
-          before_body_lines
-          |> Enum.drop(1)
-          |> Enum.map(fn line ->
-            case String.split(line, ": ", parts: 2) do
-              # Well-formed header
-              [k, v] -> {k, v}
-              # Missing value → Default to empty string
-              [k] -> {k, ""}
-            end
-          end)
-          |> Enum.into(%{})
-
-        %HttpRequest{
-          method: method,
-          target: target,
-          headers: headers,
-          body: body
-        }
-
-      _ ->
-        # Return an empty request for malformed inputs
-        %HttpRequest{}
-    end
-  end
-end
-
-defmodule HttpResponse do
-  defstruct status_code: "", headers: %{}, body: ""
-
-  def new(status_code, opts \\ []) do
-    headers = Keyword.get(opts, :headers, %{})
-    content_type = Keyword.get(opts, :content_type, "text/plain")
-    body = Keyword.get(opts, :body, "")
-
-    status_msg =
-      case status_code do
-        200 -> "OK"
-        404 -> "Not Found"
-        405 -> "Method Not Allowed"
-        500 -> "Internal Server Error"
-      end
-
-    headers_str =
-      headers
-      |> Map.put("Content-Type", content_type)
-      |> Map.put("Content-Length", Integer.to_string(byte_size(body)))
-      |> Map.to_list()
-      |> Enum.map(fn {k, v} -> "#{k}: #{v}" end)
-      |> Enum.join("\r\n")
-
-    """
-    HTTP/1.1 #{status_code} #{status_msg}\r
-    #{headers_str}\r
-    \r
-    #{body}\
-    """
-  end
-end
-
 defmodule Server do
   use Application
 
@@ -84,18 +9,10 @@ defmodule Server do
     end
 
     children = [
-      {Task, fn -> Server.listen() end}
+      {Task, fn -> listen() end}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one)
-  end
-
-  def listen() do
-    # Since the tester restarts your program quite often, setting SO_REUSEADDR
-    # ensures that we don't run into 'Address already in use' errors
-    {:ok, socket} = :gen_tcp.listen(4221, [:binary, active: false, reuseaddr: true])
-    IO.puts("Listening...")
-    accept_loop(socket)
   end
 
   defp parse_directory(argv) do
@@ -105,35 +22,52 @@ defmodule Server do
     end
   end
 
+  defp listen() do
+    # Since the tester restarts your program quite often, setting SO_REUSEADDR
+    # ensures that we don't run into 'Address already in use' errors
+    {:ok, socket} = :gen_tcp.listen(4221, [:binary, active: false, reuseaddr: true])
+    IO.puts("Listening...")
+    accept_loop(socket)
+  end
+
   defp accept_loop(socket) do
     {:ok, client} = :gen_tcp.accept(socket)
     Task.start(fn -> handle_client(client) end)
     accept_loop(socket)
   end
 
-  defp handle_client(client) do
+  defp handle_client(socket) do
+    timeout = 5000
+
     try do
-      case :gen_tcp.recv(client, 0, 5000) do
-        {:ok, request} ->
-          IO.puts("Received request:\n#{request}")
-
-          request = HttpRequest.parse(request)
-          response = route_request(request)
-
-          :gen_tcp.send(client, response)
+      case HttpRequest.parse(socket, timeout) do
+        {:ok, parsed_request} ->
+          IO.puts("Received request...")
+          IO.inspect(parsed_request, pretty: true)
+          response = route_request(parsed_request)
+          :gen_tcp.send(socket, response)
 
         {:error, :timeout} ->
-          IO.puts("Client timed out, closing connection.")
+          IO.puts("Request timed out during parsing.")
+          :gen_tcp.send(socket, HttpResponse.new(408))
+
+        {:error, :closed} ->
+          IO.puts("Client disconnected before sending full request.")
+
+        {:error, reason} ->
+          IO.puts("Request parsing failed: #{reason}.")
+          :gen_tcp.send(socket, HttpResponse.new(400))
       end
     rescue
       exception ->
         IO.puts("Stacktrace: #{Exception.format(:error, exception, __STACKTRACE__)}")
+        :gen_tcp.send(socket, HttpResponse.new(500))
     after
-      :gen_tcp.close(client)
+      :gen_tcp.close(socket)
     end
   end
 
-  defp route_request(%HttpRequest{method: method, target: target, headers: headers}) do
+  defp route_request(%HttpRequest{method: method, target: target, headers: headers, body: body}) do
     route_segments = String.split(target, "/", trim: true)
 
     case {method, route_segments} do
@@ -142,6 +76,9 @@ defmodule Server do
 
       {"GET", ["echo", to_echo]} ->
         HttpResponse.new(200, body: to_echo)
+
+      {"POST", ["echo"]} ->
+        HttpResponse.new(200, body: body)
 
       {"GET", ["user-agent"]} ->
         headers
@@ -154,11 +91,23 @@ defmodule Server do
           directory -> serve_file(directory, file_name)
         end
 
+      {"POST", ["files", file_name]} ->
+        case Application.get_env(:codecrafters_http_server, :directory) do
+          nil -> HttpResponse.new(500, body: "directory not set")
+          directory -> write_file(directory, file_name, body)
+        end
+
       {"GET", _} ->
         HttpResponse.new(404)
 
-      {_, _} ->
+      {"PUT", _} ->
         HttpResponse.new(405)
+
+      {"DELETE", _} ->
+        HttpResponse.new(405)
+
+      {_, _} ->
+        HttpResponse.new(400)
     end
   end
 
@@ -177,6 +126,19 @@ defmodule Server do
 
       {:error, reason} ->
         IO.puts("Failed to read file at #{path}: #{inspect(reason)}")
+        HttpResponse.new(500)
+    end
+  end
+
+  defp write_file(directory, file_name, content) do
+    path = Path.join(directory, file_name)
+
+    case File.write(path, content) do
+      :ok ->
+        HttpResponse.new(201)
+
+      {:error, reason} ->
+        IO.puts("Failed to write file to #{path}: #{inspect(reason)}")
         HttpResponse.new(500)
     end
   end
