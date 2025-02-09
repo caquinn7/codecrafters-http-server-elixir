@@ -81,9 +81,9 @@ defmodule Server do
 
       {"GET", ["echo", to_echo]} ->
         resp_headers =
-          case req_headers do
-            %{"Accept-Encoding" => "gzip"} -> %{"Content-Encoding" => "gzip"}
-            _ -> %{}
+          case determine_content_encoding(req_headers) do
+            nil -> %{}
+            enc -> %{"Content-Encoding" => enc}
           end
 
         HttpResponse.new(200, headers: resp_headers, body: to_echo)
@@ -119,6 +119,17 @@ defmodule Server do
 
       {_, _} ->
         HttpResponse.new(400)
+    end
+  end
+
+  defp determine_content_encoding(req_headers) do
+    req_headers
+    |> Map.get("Accept-Encoding", "")
+    |> String.split(", ")
+    |> Enum.any?(&(&1 == "gzip"))
+    |> case do
+      true -> "gzip"
+      _ -> nil
     end
   end
 
