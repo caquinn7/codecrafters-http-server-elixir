@@ -80,16 +80,7 @@ defmodule Server do
         HttpResponse.new(200)
 
       {"GET", ["echo", to_echo]} ->
-        resp_headers =
-          case determine_content_encoding(req_headers) do
-            nil -> %{}
-            enc -> %{"Content-Encoding" => enc}
-          end
-
-        HttpResponse.new(200, headers: resp_headers, body: to_echo)
-
-      {"POST", ["echo"]} ->
-        HttpResponse.new(200, body: body)
+        do_echo(req_headers, to_echo)
 
       {"GET", ["user-agent"]} ->
         req_headers
@@ -119,6 +110,16 @@ defmodule Server do
 
       {_, _} ->
         HttpResponse.new(400)
+    end
+  end
+
+  defp do_echo(req_headers, to_echo) do
+    case determine_content_encoding(req_headers) do
+      nil ->
+        HttpResponse.new(200, body: to_echo)
+
+      enc ->
+        HttpResponse.new(200, headers: %{"Content-Encoding" => enc}, body: :zlib.gzip(to_echo))
     end
   end
 
