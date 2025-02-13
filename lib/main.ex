@@ -118,7 +118,7 @@ defmodule Server do
       nil ->
         HttpResponse.new(200, body: to_echo)
 
-      enc ->
+      enc when enc == "gzip" ->
         HttpResponse.new(200, headers: %{"Content-Encoding" => enc}, body: :zlib.gzip(to_echo))
     end
   end
