@@ -17,9 +17,12 @@ defmodule App.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {Server, []}
+      mod: mod_config(Mix.env())
     ]
   end
+
+  defp mod_config(:test), do: []
+  defp mod_config(_), do: {Server, []}
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do

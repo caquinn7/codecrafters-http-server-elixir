@@ -10,7 +10,7 @@ defmodule HttpResponse do
     * `status_code` – An integer representing the HTTP status code (e.g., 200, 404).
     * `opts` (keyword list) – Optional parameters:
       * `:headers` (map) – Additional headers to include (defaults to `%{}`).
-      * `:content_type` (string) – The `Content-Type` header (defaults to `"text/plain"`).
+      * `:content_type` (string) – The `Content-Type` header (defaults to `"text/plain"`) when the body is not empty.
       * `:body` (iodata) – The response body, which can be a string, binary, or list of binaries.
 
   ## Returns
@@ -35,30 +35,37 @@ defmodule HttpResponse do
     content_type = Keyword.get(opts, :content_type, "text/plain")
     body = Keyword.get(opts, :body, [])
 
-    status_msg =
-      case status_code do
-        200 -> "OK"
-        201 -> "Created"
-        400 -> "Bad Request"
-        404 -> "Not Found"
-        405 -> "Method Not Allowed"
-        408 -> "Request Timeout"
-        500 -> "Internal Server Error"
+    headers =
+      case body do
+        [] -> headers
+        _ -> Map.put(headers, "Content-Type", content_type)
       end
 
     headers_str =
       headers
-      |> Map.put("Content-Type", content_type)
       |> Map.put("Content-Length", Integer.to_string(IO.iodata_length(body)))
       |> Map.to_list()
+      |> Enum.sort_by(fn {k, _} -> k end)
       |> Enum.map(fn {k, v} -> "#{k}: #{v}" end)
       |> Enum.join("\r\n")
 
     """
-    HTTP/1.1 #{status_code} #{status_msg}\r
+    HTTP/1.1 #{status_code} #{get_status_msg(status_code)}\r
     #{headers_str}\r
     \r
     #{body}\
     """
+  end
+
+  def get_status_msg(status_code) do
+    case status_code do
+      200 -> "OK"
+      201 -> "Created"
+      400 -> "Bad Request"
+      404 -> "Not Found"
+      405 -> "Method Not Allowed"
+      408 -> "Request Timeout"
+      500 -> "Internal Server Error"
+    end
   end
 end
