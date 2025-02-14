@@ -93,6 +93,9 @@ defmodule Server do
           directory -> serve_file(directory, file_name)
         end
 
+      {"POST", ["echo"]} ->
+        do_echo(req_headers, body)
+
       {"POST", ["files", file_name]} ->
         case Application.get_env(:codecrafters_http_server, :directory) do
           nil -> HttpResponse.new(500, body: "directory not set")
@@ -119,7 +122,11 @@ defmodule Server do
         HttpResponse.new(200, body: to_echo)
 
       enc when enc == "gzip" ->
-        HttpResponse.new(200, headers: %{"Content-Encoding" => enc}, body: :zlib.gzip(to_echo))
+        HttpResponse.new(
+          200,
+          headers: %{"Content-Encoding" => enc},
+          body: :zlib.gzip(to_echo)
+        )
     end
   end
 

@@ -95,16 +95,21 @@ defmodule HttpRequest do
   defp read_remaining_body(socket, received_body, content_len, timeout) do
     remaining_byte_count = content_len - byte_size(received_body)
 
-    if remaining_byte_count > 0 do
-      case :gen_tcp.recv(socket, remaining_byte_count, timeout) do
-        {:ok, chunk} ->
-          read_remaining_body(socket, received_body <> chunk, content_len, timeout)
+    case remaining_byte_count do
+      count when count < 0 ->
+        {:error, "Unexpected content"}
 
-        error ->
-          error
-      end
-    else
-      {:ok, received_body}
+      count when count > 0 ->
+        case :gen_tcp.recv(socket, remaining_byte_count, timeout) do
+          {:ok, chunk} ->
+            read_remaining_body(socket, received_body <> chunk, content_len, timeout)
+
+          error ->
+            error
+        end
+
+      _ ->
+        {:ok, received_body}
     end
   end
 end
